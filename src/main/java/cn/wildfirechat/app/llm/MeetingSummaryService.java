@@ -8,8 +8,10 @@ import cn.wildfirechat.app.repository.MeetingSummaryRepository;
 import cn.wildfirechat.app.repository.TranscriptionRecordRepository;
 import cn.wildfirechat.common.ErrorCode;
 import cn.wildfirechat.pojos.Conversation;
+import cn.wildfirechat.pojos.InputOutputUserInfo;
 import cn.wildfirechat.pojos.MessagePayload;
 import cn.wildfirechat.sdk.RobotService;
+import cn.wildfirechat.sdk.UserAdmin;
 import cn.wildfirechat.sdk.model.IMResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +21,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -28,6 +32,18 @@ public class MeetingSummaryService {
     private static final Logger LOG = LoggerFactory.getLogger(MeetingSummaryService.class);
     private static final Pattern CORRECTED_LINE_PATTERN = Pattern.compile("^(\\d+)\\.\\s*\\[(.*?)\\]\\s*(.*)$");
     private static final int BATCH_SIZE = 300;
+    private static final long USER_CACHE_EXPIRE_MS = 5 * 60 * 1000;
+
+    private static class UserCacheEntry {
+        final String displayName;
+        final long expireTime;
+        UserCacheEntry(String displayName, long expireTime) {
+            this.displayName = displayName;
+            this.expireTime = expireTime;
+        }
+    }
+
+    private final Map<String, UserCacheEntry> userDisplayNameCache = new ConcurrentHashMap<>();
 
     @Autowired
     private TranscriptionRecordRepository transcriptionRecordRepository;
@@ -111,7 +127,7 @@ public class MeetingSummaryService {
                 "1. 会议要点总结\n" +
                 "2. 待办事项（如果有）\n" +
                 "3. 关键决策（如果有）\n" +
-                "请使用中文输出，保持简洁明了。";
+                "请使用中文输出，保持简洁明了，避免重复，要根据内容生成，不要推测和演绎。";
         String userPrompt = "请整理以下会议纪要：\n\n" + buildTranscript(records);
 
         if (!llmService.isExceedContext(systemPrompt, userPrompt)) {
@@ -124,7 +140,7 @@ public class MeetingSummaryService {
         for (int i = 0; i < records.size(); i += BATCH_SIZE) {
             List<TranscriptionRecord> batch = records.subList(i, Math.min(i + BATCH_SIZE, records.size()));
             String batchSystem = "你是一个专业的会议记录整理助手。请对以下会议片段整理出要点、待办事项和关键决策。\n" +
-                    "请使用中文输出，保持简洁明了。";
+                    "请使用中文输出，保持简洁明了，避免重复，要根据内容生成，不要推测和演绎。";
             String batchUser = "请整理以下会议片段：\n\n" + buildTranscript(batch);
             String batchSummary = llmService.chat(batchSystem, batchUser);
             if (batchSummary != null && !batchSummary.isEmpty()) {
@@ -146,7 +162,7 @@ public class MeetingSummaryService {
                 "1. 会议要点总结\n" +
                 "2. 待办事项（如果有）\n" +
                 "3. 关键决策（如果有）\n" +
-                "请使用中文输出，保持简洁明了，避免重复。";
+                "请使用中文输出，保持简洁明了，避免重复，要根据内容生成，不要推测和演绎。";
         String finalUser = "请将以下小结汇总成完整纪要：\n\n" + summaryBuilder.toString();
         return llmService.chat(finalSystem, finalUser);
     }
@@ -209,11 +225,33 @@ public class MeetingSummaryService {
         }
     }
 
+    private String getUserDisplayName(String userId) {
+        UserCacheEntry entry = userDisplayNameCache.get(userId);
+        if (entry != null && System.currentTimeMillis() < entry.expireTime) {
+            return entry.displayName;
+        }
+        try {
+            IMResult<InputOutputUserInfo> result = UserAdmin.getUserByUserId(userId);
+            if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS && result.getResult() != null) {
+                String displayName = result.getResult().getDisplayName();
+                if (displayName == null || displayName.isEmpty()) {
+                    displayName = userId;
+                }
+                userDisplayNameCache.put(userId, new UserCacheEntry(displayName, System.currentTimeMillis() + USER_CACHE_EXPIRE_MS));
+                return displayName;
+            }
+        } catch (Exception e) {
+            LOG.error("Failed to get user info for userId={}", userId, e);
+        }
+        userDisplayNameCache.put(userId, new UserCacheEntry(userId, System.currentTimeMillis() + USER_CACHE_EXPIRE_MS));
+        return userId;
+    }
+
     private String buildTranscript(List<TranscriptionRecord> records) {
         StringBuilder sb = new StringBuilder();
         for (TranscriptionRecord record : records) {
             String text = record.getCorrectedContent() != null ? record.getCorrectedContent() : record.getContent();
-            sb.append("[").append(record.getUserId()).append("] ").append(text).append("\n");
+            sb.append("[").append(getUserDisplayName(record.getUserId())).append("] ").append(text).append("\n");
         }
         return sb.toString();
     }
