@@ -32,6 +32,9 @@ public class TranscriptionRecord {
     @Column(name = "segment_name", length = 512)
     private String segmentName;
 
+    @Column(name = "message_id")
+    private Long messageId;
+
     @Column(name = "created_at")
     @Temporal(TemporalType.TIMESTAMP)
     private Date createdAt;
@@ -103,6 +106,14 @@ public class TranscriptionRecord {
 
     public void setSegmentName(String segmentName) {
         this.segmentName = segmentName;
+    }
+
+    public Long getMessageId() {
+        return messageId;
+    }
+
+    public void setMessageId(Long messageId) {
+        this.messageId = messageId;
     }
 
     public Date getCreatedAt() {

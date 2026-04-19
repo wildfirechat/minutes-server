@@ -14,6 +14,7 @@ import dev.onvoid.webrtc.media.video.VideoTrack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.StringUtils;
 
@@ -22,6 +23,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 
 @org.springframework.stereotype.Service
 public class CallService {
@@ -51,6 +53,10 @@ public class CallService {
     private MeetingSummaryService meetingSummaryService;
 
     private RobotService robotService;
+
+    @Autowired
+    @Qualifier("asyncExecutor")
+    private Executor executor;
 
     private final Map<String, CallSession> sessionMap = new ConcurrentHashMap<>();
 
@@ -87,7 +93,7 @@ public class CallService {
         }
 
         Conversation conversation = new Conversation(2, conferenceId, 0);
-        CallSession callSession = AVEngineKit.getInstance().joinConference(conferenceId, pin, true, advance, true, new AsrAudioDevice(conversation, conferenceId, robotImId, robotService, transcriptionRecordRepository, mWebsocketUrl), new CallEventCallback() {
+        CallSession callSession = AVEngineKit.getInstance().joinConference(conferenceId, pin, true, advance, true, new AsrAudioDevice(conversation, conferenceId, robotImId, robotService, transcriptionRecordRepository, mWebsocketUrl, executor), new CallEventCallback() {
             @Override
             public void onCallStateUpdated(CallSession callSession, CallState state) {
 

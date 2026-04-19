@@ -16,6 +16,7 @@ import cn.wildfirechat.sdk.model.IMResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -57,6 +59,10 @@ public class MeetingSummaryService {
     @Autowired
     private MeetingSummaryRepository meetingSummaryRepository;
 
+    @Autowired
+    @Qualifier("messageUpdateExecutor")
+    private Executor executor;
+
     @Async("asyncExecutor")
     public void generateAndSendSummary(String conferenceId, RobotService robotService, String robotId) {
         LOG.info("Start generating meeting summary for conferenceId={}", conferenceId);
@@ -70,7 +76,7 @@ public class MeetingSummaryService {
                 return;
             }
 
-            correctTranscriptions(records, conferenceId);
+            correctTranscriptions(records, conferenceId, robotService);
 
             String summary = generateSummary(records, conferenceId);
             if (summary == null || summary.isEmpty()) {
@@ -167,7 +173,7 @@ public class MeetingSummaryService {
         return llmService.chat(finalSystem, finalUser);
     }
 
-    private void correctTranscriptions(List<TranscriptionRecord> records, String conferenceId) {
+    private void correctTranscriptions(List<TranscriptionRecord> records, String conferenceId, RobotService robotService) {
         if (records == null || records.isEmpty()) {
             return;
         }
@@ -181,7 +187,7 @@ public class MeetingSummaryService {
         String originalText = buildOriginalText(records, 0);
 
         if (!llmService.isExceedContext(systemPrompt, originalText)) {
-            doCorrectBatch(records, 0, systemPrompt, originalText, conferenceId);
+            doCorrectBatch(records, 0, systemPrompt, originalText, conferenceId, robotService);
             return;
         }
 
@@ -189,11 +195,23 @@ public class MeetingSummaryService {
         for (int i = 0; i < records.size(); i += BATCH_SIZE) {
             List<TranscriptionRecord> batch = records.subList(i, Math.min(i + BATCH_SIZE, records.size()));
             String batchText = buildOriginalText(batch, i);
-            doCorrectBatch(batch, i, systemPrompt, batchText, conferenceId);
+            doCorrectBatch(batch, i, systemPrompt, batchText, conferenceId, robotService);
         }
     }
 
-    private void doCorrectBatch(List<TranscriptionRecord> records, int offset, String systemPrompt, String originalText, String conferenceId) {
+    private static class MessageUpdateTask {
+        final long messageId;
+        final String correctedContent;
+        final Long recordId;
+
+        MessageUpdateTask(long messageId, String correctedContent, Long recordId) {
+            this.messageId = messageId;
+            this.correctedContent = correctedContent;
+            this.recordId = recordId;
+        }
+    }
+
+    private void doCorrectBatch(List<TranscriptionRecord> records, int offset, String systemPrompt, String originalText, String conferenceId, RobotService robotService) {
         try {
             String userPrompt = "请矫正以下语音识别文本（保持编号格式返回）：\n\n" + originalText;
             String correctedText = llmService.chat(systemPrompt, userPrompt);
@@ -203,6 +221,7 @@ public class MeetingSummaryService {
             }
 
             int matchedCount = 0;
+            List<MessageUpdateTask> updateTasks = new ArrayList<>();
             String[] lines = correctedText.split("\n");
             for (String line : lines) {
                 Matcher matcher = CORRECTED_LINE_PATTERN.matcher(line.trim());
@@ -211,8 +230,13 @@ public class MeetingSummaryService {
                     int localIndex = globalIndex - offset;
                     String correctedContent = matcher.group(3).trim();
                     if (localIndex >= 0 && localIndex < records.size()) {
-                        records.get(localIndex).setCorrectedContent(correctedContent);
+                        TranscriptionRecord record = records.get(localIndex);
+                        record.setCorrectedContent(correctedContent);
                         matchedCount++;
+
+                        if (robotService != null && record.getMessageId() != null && record.getMessageId() > 0) {
+                            updateTasks.add(new MessageUpdateTask(record.getMessageId(), correctedContent, record.getId()));
+                        }
                     }
                 }
             }
@@ -220,6 +244,27 @@ public class MeetingSummaryService {
             transcriptionRecordRepository.saveAll(records);
             LOG.info("Transcription correction completed for batch offset={}, conferenceId={}, matched={}/{}",
                     offset, conferenceId, matchedCount, records.size());
+
+            if (!updateTasks.isEmpty() && executor != null) {
+                executor.execute(() -> {
+                    for (MessageUpdateTask task : updateTasks) {
+                        try {
+                            MessagePayload payload = new MessagePayload();
+                            payload.setType(1);
+                            payload.setSearchableContent(task.correctedContent);
+                            IMResult<Void> updateResult = robotService.updateMessage(task.messageId, payload, false);
+                            if (updateResult != null && updateResult.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
+                                LOG.info("Updated message content for record id={}, messageId={}", task.recordId, task.messageId);
+                            } else {
+                                LOG.error("Failed to update message content for record id={}, messageId={}, code={}", task.recordId, task.messageId, updateResult != null ? updateResult.getCode() : "null");
+                            }
+                            Thread.sleep(100);
+                        } catch (Exception ex) {
+                            LOG.error("Failed to update message content for record id={}, messageId={}", task.recordId, task.messageId, ex);
+                        }
+                    }
+                });
+            }
         } catch (Exception e) {
             LOG.error("Failed to correct transcriptions for batch offset={}, conferenceId={}", offset, conferenceId, e);
         }

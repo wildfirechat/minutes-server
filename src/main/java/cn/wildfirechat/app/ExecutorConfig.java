@@ -13,9 +13,20 @@ public class ExecutorConfig {
 
     @Bean
     public Executor asyncExecutor() {
+        int processors = Runtime.getRuntime().availableProcessors();
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(10);
-        executor.setMaxPoolSize(10);
+        executor.setCorePoolSize(Math.max(1, processors/2));
+        executor.setMaxPoolSize(processors * 5);
+        executor.initialize();
+        return executor;
+    }
+
+    @Bean
+    public Executor messageUpdateExecutor() {
+        int processors = Runtime.getRuntime().availableProcessors();
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(Math.max(1, processors/4));
+        executor.setMaxPoolSize(processors);
         executor.initialize();
         return executor;
     }

@@ -22,6 +22,7 @@ import java.net.URISyntaxException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
@@ -37,6 +38,7 @@ public class AsrAudioDevice implements AudioDevice {
     private final RobotService robotService;
     private final TranscriptionRecordRepository transcriptionRecordRepository;
     private final String websocketUrl;
+    private final Executor executor;
     private volatile CallSession callSession;
 
     private class Recorder implements Runnable {
@@ -147,47 +149,11 @@ public class AsrAudioDevice implements AudioDevice {
                         if("pong".equals(message)) {
                             return; //ignore pong message
                         }
-                        // 解析 [timestamp_ms+duration]text 格式
-                        if (transcriptionRecordRepository != null) {
-                            try {
-                                Matcher matcher = MESSAGE_PATTERN.matcher(message);
-                                if (matcher.matches()) {
-                                    long timestampMs = Long.parseLong(matcher.group(1));
-                                    double duration = Double.parseDouble(matcher.group(2));
-                                    String content = matcher.group(3);
 
-                                    TranscriptionRecord record = new TranscriptionRecord();
-                                    record.setConferenceId(conferenceId);
-                                    record.setUserId(userId);
-                                    record.setTimestampMs(timestampMs);
-                                    record.setDuration((int)(duration*1000));
-                                    record.setContent(content);
-                                    String segmentName = conferenceId + "--" + userId + "-[" + timestampMs + "+" + duration + "]";
-                                    record.setSegmentName(segmentName);
-                                    transcriptionRecordRepository.save(record);
-                                    LOG.info("Saved transcription record for conferenceId={}, userId={}, timestampMs={}", conferenceId, userId, timestampMs);
-                                } else {
-                                    LOG.warn("Received websocket text does not match expected pattern: {}", message);
-                                }
-                            } catch (Exception e) {
-                                LOG.error("Failed to save transcription record", e);
-                            }
-                        }
-
-                        if (robotService != null && conversation != null) {
-                            try {
-                                MessagePayload payload = new MessagePayload();
-                                payload.setType(1);
-                                payload.setSearchableContent(message);
-                                IMResult<SendMessageResult> result = robotService.sendMessage(robotId, conversation, payload);
-                                if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
-                                    LOG.info("Send websocket text message success");
-                                } else {
-                                    LOG.error("Send websocket text message error {}", result != null ? result.getCode() : "null");
-                                }
-                            } catch (Exception e) {
-                                LOG.error("Send websocket text message exception", e);
-                            }
+                        if (executor != null) {
+                            executor.execute(() -> handleTranscriptionMessage(message));
+                        } else {
+                            handleTranscriptionMessage(message);
                         }
                     }
 
@@ -262,18 +228,67 @@ public class AsrAudioDevice implements AudioDevice {
             }
             webSocketClient.close();
         }
+
+        private void handleTranscriptionMessage(String message) {
+            TranscriptionRecord record = new TranscriptionRecord();
+            if (robotService != null && conversation != null) {
+                try {
+                    MessagePayload payload = new MessagePayload();
+                    payload.setType(1);
+                    payload.setSearchableContent(message);
+                    IMResult<SendMessageResult> result = robotService.sendMessage(robotId, conversation, payload);
+                    if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
+                        LOG.info("Send websocket text message success");
+                        if (result.getResult() != null) {
+                            record.setMessageId(result.getResult().getMessageUid());
+                        }
+                    } else {
+                        LOG.error("Send websocket text message error {}", result != null ? result.getCode() : "null");
+                    }
+                } catch (Exception e) {
+                    LOG.error("Send websocket text message exception", e);
+                }
+            }
+
+            // 解析 [timestamp_ms+duration]text 格式
+            if (transcriptionRecordRepository != null) {
+                try {
+                    Matcher matcher = MESSAGE_PATTERN.matcher(message);
+                    if (matcher.matches()) {
+                        long timestampMs = Long.parseLong(matcher.group(1));
+                        double duration = Double.parseDouble(matcher.group(2));
+                        String content = matcher.group(3);
+
+                        record.setConferenceId(conferenceId);
+                        record.setUserId(userId);
+                        record.setTimestampMs(timestampMs);
+                        record.setDuration((int)(duration*1000));
+                        record.setContent(content);
+                        String segmentName = conferenceId + "--" + userId + "-[" + timestampMs + "+" + duration + "]";
+                        record.setSegmentName(segmentName);
+                        transcriptionRecordRepository.save(record);
+                        LOG.info("Saved transcription record for conferenceId={}, userId={}, timestampMs={}", conferenceId, userId, timestampMs);
+                    } else {
+                        LOG.warn("Received websocket text does not match expected pattern: {}", message);
+                    }
+                } catch (Exception e) {
+                    LOG.error("Failed to save transcription record", e);
+                }
+            }
+        }
     }
 
     private Map<String, Recorder> recorderMap = new ConcurrentHashMap<>();
 
 
-    public AsrAudioDevice(Conversation conversation, String conferenceId, String robotId, RobotService robotService, TranscriptionRecordRepository transcriptionRecordRepository, String websocketUrl) {
+    public AsrAudioDevice(Conversation conversation, String conferenceId, String robotId, RobotService robotService, TranscriptionRecordRepository transcriptionRecordRepository, String websocketUrl, Executor executor) {
         this.conversation = conversation;
         this.robotId = robotId;
         this.robotService = robotService;
         this.conferenceId = conferenceId;
         this.transcriptionRecordRepository = transcriptionRecordRepository;
         this.websocketUrl = websocketUrl;
+        this.executor = executor;
     }
 
     @Override
