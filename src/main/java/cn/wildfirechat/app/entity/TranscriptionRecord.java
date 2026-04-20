@@ -35,6 +35,9 @@ public class TranscriptionRecord {
     @Column(name = "message_id")
     private Long messageId;
 
+    @Column(name = "screen_sharing")
+    private Boolean screenSharing;
+
     @Column(name = "created_at")
     @Temporal(TemporalType.TIMESTAMP)
     private Date createdAt;
@@ -114,6 +117,14 @@ public class TranscriptionRecord {
 
     public void setMessageId(Long messageId) {
         this.messageId = messageId;
+    }
+
+    public Boolean getScreenSharing() {
+        return screenSharing;
+    }
+
+    public void setScreenSharing(Boolean screenSharing) {
+        this.screenSharing = screenSharing;
     }
 
     public Date getCreatedAt() {

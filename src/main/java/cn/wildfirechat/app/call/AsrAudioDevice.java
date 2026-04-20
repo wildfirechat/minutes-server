@@ -32,6 +32,7 @@ import java.util.regex.Pattern;
 public class AsrAudioDevice implements AudioDevice {
     private static final Logger LOG = LoggerFactory.getLogger(AsrAudioDevice.class);
     private static final Pattern MESSAGE_PATTERN = Pattern.compile("\\[(\\d+)\\+([\\d.]+)\\](.*)");
+    private static final String SCREEN_SHARING_PREFIX = "screen_sharing_";
     private final Conversation conversation;
     private final String robotId;
     private final String conferenceId;
@@ -43,6 +44,8 @@ public class AsrAudioDevice implements AudioDevice {
 
     private class Recorder implements Runnable {
         final private String userId;
+        final private String realUserId;
+        final private boolean screenSharing;
         Thread t;
         boolean stoped;
         private WebSocketClient webSocketClient;
@@ -55,6 +58,13 @@ public class AsrAudioDevice implements AudioDevice {
 
         public Recorder(String userId) {
             this.userId = userId;
+            if (userId != null && userId.startsWith(SCREEN_SHARING_PREFIX)) {
+                this.screenSharing = true;
+                this.realUserId = userId.substring(SCREEN_SHARING_PREFIX.length());
+            } else {
+                this.screenSharing = false;
+                this.realUserId = userId;
+            }
             // 中等品质、固定因子 1/3 的重采样器
             this.resampler = new Resampler(true, RESAMPLE_FACTOR, RESAMPLE_FACTOR);
         }
@@ -260,14 +270,15 @@ public class AsrAudioDevice implements AudioDevice {
                         String content = matcher.group(3);
 
                         record.setConferenceId(conferenceId);
-                        record.setUserId(userId);
+                        record.setUserId(realUserId);
                         record.setTimestampMs(timestampMs);
                         record.setDuration((int)(duration*1000));
                         record.setContent(content);
+                        record.setScreenSharing(screenSharing);
                         String segmentName = conferenceId + "--" + userId + "-[" + timestampMs + "+" + duration + "]";
                         record.setSegmentName(segmentName);
                         transcriptionRecordRepository.save(record);
-                        LOG.info("Saved transcription record for conferenceId={}, userId={}, timestampMs={}", conferenceId, userId, timestampMs);
+                        LOG.info("Saved transcription record for conferenceId={}, userId={}, screenSharing={}, timestampMs={}", conferenceId, realUserId, screenSharing, timestampMs);
                     } else {
                         LOG.warn("Received websocket text does not match expected pattern: {}", message);
                     }

@@ -270,33 +270,50 @@ public class MeetingSummaryService {
         }
     }
 
-    private String getUserDisplayName(String userId) {
-        UserCacheEntry entry = userDisplayNameCache.get(userId);
+    private static final String SCREEN_SHARING_PREFIX = "screen_sharing_";
+
+    private String extractRealUserId(String userId) {
+        if (userId != null && userId.startsWith(SCREEN_SHARING_PREFIX)) {
+            return userId.substring(SCREEN_SHARING_PREFIX.length());
+        }
+        return userId;
+    }
+
+    private String getUserDisplayName(String userId, boolean screenSharing) {
+        String realUserId = extractRealUserId(userId);
+        UserCacheEntry entry = userDisplayNameCache.get(realUserId);
         if (entry != null && System.currentTimeMillis() < entry.expireTime) {
-            return entry.displayName;
+            return formatDisplayName(entry.displayName, screenSharing);
         }
         try {
-            IMResult<InputOutputUserInfo> result = UserAdmin.getUserByUserId(userId);
+            IMResult<InputOutputUserInfo> result = UserAdmin.getUserByUserId(realUserId);
             if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS && result.getResult() != null) {
                 String displayName = result.getResult().getDisplayName();
                 if (displayName == null || displayName.isEmpty()) {
-                    displayName = userId;
+                    displayName = realUserId;
                 }
-                userDisplayNameCache.put(userId, new UserCacheEntry(displayName, System.currentTimeMillis() + USER_CACHE_EXPIRE_MS));
-                return displayName;
+                userDisplayNameCache.put(realUserId, new UserCacheEntry(displayName, System.currentTimeMillis() + USER_CACHE_EXPIRE_MS));
+                return formatDisplayName(displayName, screenSharing);
             }
         } catch (Exception e) {
-            LOG.error("Failed to get user info for userId={}", userId, e);
+            LOG.error("Failed to get user info for userId={}", realUserId, e);
         }
-        userDisplayNameCache.put(userId, new UserCacheEntry(userId, System.currentTimeMillis() + USER_CACHE_EXPIRE_MS));
-        return userId;
+        userDisplayNameCache.put(realUserId, new UserCacheEntry(realUserId, System.currentTimeMillis() + USER_CACHE_EXPIRE_MS));
+        return formatDisplayName(realUserId, screenSharing);
+    }
+
+    private String formatDisplayName(String displayName, Boolean screenSharing) {
+        if (screenSharing != null && screenSharing) {
+            return displayName + "(屏幕共享)";
+        }
+        return displayName;
     }
 
     private String buildTranscript(List<TranscriptionRecord> records) {
         StringBuilder sb = new StringBuilder();
         for (TranscriptionRecord record : records) {
             String text = record.getCorrectedContent() != null ? record.getCorrectedContent() : record.getContent();
-            sb.append("[").append(getUserDisplayName(record.getUserId())).append("] ").append(text).append("\n");
+            sb.append("[").append(getUserDisplayName(record.getUserId(), record.getScreenSharing())).append("] ").append(text).append("\n");
         }
         return sb.toString();
     }
@@ -305,7 +322,8 @@ public class MeetingSummaryService {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < records.size(); i++) {
             TranscriptionRecord record = records.get(i);
-            sb.append(i + 1 + offset).append(". [").append(record.getUserId()).append("] ")
+            String realUserId = extractRealUserId(record.getUserId());
+            sb.append(i + 1 + offset).append(". [").append(realUserId).append("] ")
                     .append(record.getContent()).append("\n");
         }
         return sb.toString();

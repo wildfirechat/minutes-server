@@ -130,21 +130,31 @@ public class CallService {
         sessionMap.put(conferenceId, callSession);
     }
 
+    private static final String SCREEN_SHARING_PREFIX = "screen_sharing_";
+
+    private String extractRealUserId(String userId) {
+        if (userId != null && userId.startsWith(SCREEN_SHARING_PREFIX)) {
+            return userId.substring(SCREEN_SHARING_PREFIX.length());
+        }
+        return userId;
+    }
+
     private void recordParticipant(String conferenceId, String userId) {
         if (conferenceParticipantRepository == null || StringUtils.isEmpty(userId)) {
             return;
         }
         try {
-            boolean hasPermission = checkParticipantPermission(userId);
+            String realUserId = extractRealUserId(userId);
+            boolean hasPermission = checkParticipantPermission(realUserId);
 
             ConferenceParticipant participant = new ConferenceParticipant();
             participant.setConferenceId(conferenceId);
-            participant.setUserId(userId);
+            participant.setUserId(realUserId);
             participant.setHasPermission(hasPermission);
             participant.setJoinedAt(new Date());
             conferenceParticipantRepository.save(participant);
 
-            LOG.info("Recorded participant conferenceId={}, userId={}, hasPermission={}", conferenceId, userId, hasPermission);
+            LOG.info("Recorded participant conferenceId={}, userId={}, realUserId={}, hasPermission={}", conferenceId, userId, realUserId, hasPermission);
         } catch (Exception e) {
             LOG.error("Failed to record participant", e);
         }
