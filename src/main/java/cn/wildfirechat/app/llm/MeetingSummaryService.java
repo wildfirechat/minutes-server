@@ -20,6 +20,11 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -70,15 +75,16 @@ public class MeetingSummaryService {
         try {
             Thread.sleep(3000);
 
-            List<TranscriptionRecord> records = transcriptionRecordRepository.findByConferenceIdOrderByCreatedAtAsc(conferenceId);
-            if (records == null || records.isEmpty()) {
+            Pageable checkPageable = PageRequest.of(0, 1, Sort.by("createdAt").ascending());
+            Page<TranscriptionRecord> checkPage = transcriptionRecordRepository.findPageByConferenceIdOrderByCreatedAtAsc(conferenceId, checkPageable);
+            if (!checkPage.hasContent()) {
                 LOG.info("No transcription records found for conferenceId={}, skip summary", conferenceId);
                 return;
             }
 
-            correctTranscriptions(records, conferenceId, robotService);
+            correctTranscriptions(conferenceId, robotService);
 
-            String summary = generateSummary(records, conferenceId);
+            String summary = generateSummary(conferenceId);
             if (summary == null || summary.isEmpty()) {
                 LOG.warn("LLM returned empty summary for conferenceId={}", conferenceId);
                 return;
@@ -128,13 +134,32 @@ public class MeetingSummaryService {
         }
     }
 
-    private String generateSummary(List<TranscriptionRecord> records, String conferenceId) {
+    private String generateSummary(String conferenceId) {
         String systemPrompt = "你是一个专业的会议记录整理助手。请根据提供的会议录音转写文本，整理成一份结构化的会议纪要。要求包括：\n" +
                 "1. 会议要点总结\n" +
                 "2. 待办事项（如果有）\n" +
                 "3. 关键决策（如果有）\n" +
                 "请使用中文输出，保持简洁明了，避免重复，要根据内容生成，不要推测和演绎。";
-        String userPrompt = "请整理以下会议纪要：\n\n" + buildTranscript(records);
+
+        List<String> batchTexts = new ArrayList<>();
+        int pageNumber = 0;
+        Pageable pageable = PageRequest.of(pageNumber, BATCH_SIZE, Sort.by("createdAt").ascending());
+        Page<TranscriptionRecord> recordPage;
+
+        do {
+            recordPage = transcriptionRecordRepository.findPageByConferenceIdOrderByCreatedAtAsc(conferenceId, pageable);
+            List<TranscriptionRecord> records = recordPage.getContent();
+            if (!records.isEmpty()) {
+                batchTexts.add(buildTranscript(records));
+            }
+            pageable = recordPage.nextPageable();
+        } while (recordPage.hasNext());
+
+        StringBuilder fullText = new StringBuilder();
+        for (String text : batchTexts) {
+            fullText.append(text);
+        }
+        String userPrompt = "请整理以下会议纪要：\n\n" + fullText.toString();
 
         if (!llmService.isExceedContext(systemPrompt, userPrompt)) {
             return llmService.chat(systemPrompt, userPrompt);
@@ -143,11 +168,10 @@ public class MeetingSummaryService {
         LOG.info("Transcript too long for conferenceId={}, switch to batch summary mode", conferenceId);
         List<String> partialSummaries = new ArrayList<>();
 
-        for (int i = 0; i < records.size(); i += BATCH_SIZE) {
-            List<TranscriptionRecord> batch = records.subList(i, Math.min(i + BATCH_SIZE, records.size()));
+        for (String batchText : batchTexts) {
             String batchSystem = "你是一个专业的会议记录整理助手。请对以下会议片段整理出要点、待办事项和关键决策。\n" +
                     "请使用中文输出，保持简洁明了，避免重复，要根据内容生成，不要推测和演绎。";
-            String batchUser = "请整理以下会议片段：\n\n" + buildTranscript(batch);
+            String batchUser = "请整理以下会议片段：\n\n" + batchText;
             String batchSummary = llmService.chat(batchSystem, batchUser);
             if (batchSummary != null && !batchSummary.isEmpty()) {
                 partialSummaries.add(batchSummary);
@@ -173,30 +197,44 @@ public class MeetingSummaryService {
         return llmService.chat(finalSystem, finalUser);
     }
 
-    private void correctTranscriptions(List<TranscriptionRecord> records, String conferenceId, RobotService robotService) {
-        if (records == null || records.isEmpty()) {
-            return;
-        }
-
+    private void correctTranscriptions(String conferenceId, RobotService robotService) {
         String systemPrompt = "你是一个专业的语音识别文本矫正助手。请对以下语音识别转写文本进行逐条矫正。主要修正：\n" +
                 "1. 同音字、错别字\n" +
                 "2. 专有名词（人名、公司名、技术术语等）\n" +
                 "3. 标点符号和语句通顺性\n" +
                 "4. 去除无意义的语气词重复\n\n" +
                 "重要要求：请保持原有格式，对每一行分别矫正后按相同编号返回。不要改变编号顺序，也不要合并或拆分行。";
-        String originalText = buildOriginalText(records, 0);
 
-        if (!llmService.isExceedContext(systemPrompt, originalText)) {
-            doCorrectBatch(records, 0, systemPrompt, originalText, conferenceId, robotService);
-            return;
-        }
+        int totalOffset = 0;
+        int pageNumber = 0;
+        Pageable pageable = PageRequest.of(pageNumber, BATCH_SIZE, Sort.by("createdAt").ascending());
+        Page<TranscriptionRecord> recordPage;
 
-        LOG.info("Transcription too long for conferenceId={}, switch to batch correction mode, records={}", conferenceId, records.size());
-        for (int i = 0; i < records.size(); i += BATCH_SIZE) {
-            List<TranscriptionRecord> batch = records.subList(i, Math.min(i + BATCH_SIZE, records.size()));
-            String batchText = buildOriginalText(batch, i);
-            doCorrectBatch(batch, i, systemPrompt, batchText, conferenceId, robotService);
-        }
+        do {
+            recordPage = transcriptionRecordRepository.findPageByConferenceIdOrderByCreatedAtAsc(conferenceId, pageable);
+            List<TranscriptionRecord> records = recordPage.getContent();
+            if (records.isEmpty()) {
+                pageable = recordPage.nextPageable();
+                continue;
+            }
+
+            String originalText = buildOriginalText(records, totalOffset);
+
+            if (!llmService.isExceedContext(systemPrompt, originalText)) {
+                doCorrectBatch(records, totalOffset, systemPrompt, originalText, conferenceId, robotService);
+            } else {
+                LOG.info("Transcription too long for conferenceId={}, switch to batch correction mode, page={}, records={}", conferenceId, pageNumber, records.size());
+                for (int i = 0; i < records.size(); i += BATCH_SIZE) {
+                    List<TranscriptionRecord> batch = records.subList(i, Math.min(i + BATCH_SIZE, records.size()));
+                    String batchText = buildOriginalText(batch, totalOffset + i);
+                    doCorrectBatch(batch, totalOffset + i, systemPrompt, batchText, conferenceId, robotService);
+                }
+            }
+
+            totalOffset += records.size();
+            pageable = recordPage.nextPageable();
+            pageNumber++;
+        } while (recordPage.hasNext());
     }
 
     private static class MessageUpdateTask {
@@ -252,6 +290,9 @@ public class MeetingSummaryService {
                             MessagePayload payload = new MessagePayload();
                             payload.setType(1);
                             payload.setSearchableContent(task.correctedContent);
+                            if(task.correctedContent.contains("]")) {
+                                payload.setSearchableContent(task.correctedContent.substring(task.correctedContent.indexOf("]")));
+                            }
                             IMResult<Void> updateResult = robotService.updateMessage(task.messageId, payload, false);
                             if (updateResult != null && updateResult.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
                                 LOG.info("Updated message content for record id={}, messageId={}", task.recordId, task.messageId);

@@ -19,7 +19,9 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -33,6 +35,8 @@ public class AsrAudioDevice implements AudioDevice {
     private static final Logger LOG = LoggerFactory.getLogger(AsrAudioDevice.class);
     private static final Pattern MESSAGE_PATTERN = Pattern.compile("\\[(\\d+)\\+([\\d.]+)\\](.*)");
     private static final String SCREEN_SHARING_PREFIX = "screen_sharing_";
+    private static final int WRITE_BATCH_SIZE = 50;
+    private final List<TranscriptionRecord> writeBuffer = new ArrayList<>();
     private final Conversation conversation;
     private final String robotId;
     private final String conferenceId;
@@ -89,6 +93,7 @@ public class AsrAudioDevice implements AudioDevice {
 
         public void stop() {
             stoped = true;
+            flushWriteBuffer();
         }
 
         public void playoutData(byte[] sampleData, int nBuffSize) {
@@ -203,6 +208,7 @@ public class AsrAudioDevice implements AudioDevice {
             }
 
             long lastPingTime = System.currentTimeMillis();
+            long lastFlushTime = System.currentTimeMillis();
             while (!stoped) {
                 // 每15秒发送一次心跳
                 if (System.currentTimeMillis() - lastPingTime > 15000) {
@@ -218,6 +224,11 @@ public class AsrAudioDevice implements AudioDevice {
                     lastPingTime = System.currentTimeMillis();
                 }
 
+                if (System.currentTimeMillis() - lastFlushTime > 2000) {
+                    flushWriteBuffer();
+                    lastFlushTime = System.currentTimeMillis();
+                }
+
                 byte[] data = cacheQueue.poll();
                 if (data != null) {
                     if (webSocketClient != null && webSocketClient.isOpen()) {
@@ -231,6 +242,7 @@ public class AsrAudioDevice implements AudioDevice {
                     }
                 }
             }
+            flushWriteBuffer();
             try {
                 Thread.sleep(3000);
             } catch (InterruptedException e) {
@@ -246,6 +258,9 @@ public class AsrAudioDevice implements AudioDevice {
                     MessagePayload payload = new MessagePayload();
                     payload.setType(1);
                     payload.setSearchableContent(message);
+                    if(message.contains("[") && message.contains("]")) {
+                        payload.setSearchableContent(message.substring(message.indexOf("]")));
+                    }
                     IMResult<SendMessageResult> result = robotService.sendMessage(robotId, conversation, payload);
                     if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
                         LOG.info("Send websocket text message success");
@@ -277,8 +292,13 @@ public class AsrAudioDevice implements AudioDevice {
                         record.setScreenSharing(screenSharing);
                         String segmentName = conferenceId + "--" + userId + "-[" + timestampMs + "+" + duration + "]";
                         record.setSegmentName(segmentName);
-                        transcriptionRecordRepository.save(record);
-                        LOG.info("Saved transcription record for conferenceId={}, userId={}, screenSharing={}, timestampMs={}", conferenceId, realUserId, screenSharing, timestampMs);
+                        synchronized (writeBuffer) {
+                            writeBuffer.add(record);
+                            if (writeBuffer.size() >= WRITE_BATCH_SIZE) {
+                                flushWriteBuffer();
+                            }
+                        }
+                        LOG.info("Buffered transcription record for batch save, conferenceId={}, userId={}, screenSharing={}, timestampMs={}", conferenceId, realUserId, screenSharing, timestampMs);
                     } else {
                         LOG.warn("Received websocket text does not match expected pattern: {}", message);
                     }
@@ -286,6 +306,23 @@ public class AsrAudioDevice implements AudioDevice {
                     LOG.error("Failed to save transcription record", e);
                 }
             }
+        }
+    }
+
+    private void flushWriteBuffer() {
+        List<TranscriptionRecord> toSave;
+        synchronized (writeBuffer) {
+            if (writeBuffer.isEmpty()) {
+                return;
+            }
+            toSave = new ArrayList<>(writeBuffer);
+            writeBuffer.clear();
+        }
+        try {
+            transcriptionRecordRepository.saveAll(toSave);
+            LOG.info("Batch saved {} transcription records for conferenceId={}", toSave.size(), conferenceId);
+        } catch (Exception e) {
+            LOG.error("Failed to batch save transcription records for conferenceId={}, count={}", conferenceId, toSave.size(), e);
         }
     }
 

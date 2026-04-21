@@ -4,7 +4,10 @@ import javax.persistence.*;
 import java.util.Date;
 
 @Entity
-@Table(name = "transcription_record")
+@Table(name = "transcription_record", indexes = {
+        @Index(name = "idx_tr_conference_created", columnList = "conference_id, created_at"),
+        @Index(name = "idx_tr_user_id", columnList = "user_id")
+})
 public class TranscriptionRecord {
 
     @Id

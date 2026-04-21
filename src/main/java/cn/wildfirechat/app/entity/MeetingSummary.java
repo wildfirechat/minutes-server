@@ -4,7 +4,9 @@ import javax.persistence.*;
 import java.util.Date;
 
 @Entity
-@Table(name = "meeting_summary")
+@Table(name = "meeting_summary", indexes = {
+        @Index(name = "idx_ms_conference_id", columnList = "conference_id", unique = true)
+})
 public class MeetingSummary {
 
     @Id
