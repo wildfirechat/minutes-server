@@ -99,9 +99,8 @@ java -jar minutes-XXXXX.jar
 | `conference_participant` | 会议参会者记录 |
 | `meeting_summary` | 会议纪要表 |
 
-## 使用到的开源代码
-
-1. [TypeBuilder](https://github.com/ikidou/TypeBuilder) 一个用于生成泛型的简易 Builder
+## 字幕的优化
+现在字幕就是简单的往聊天室里发送消息。可以进一步优化，使用自定义透传消息，当客户端收到后，显示在页面某个位置。而且可以把最近一段都输入大模型，让大模型矫正，再发出来更正字幕。另外也可以考虑实时翻译等功能。
 
 ## LICENSE
 
