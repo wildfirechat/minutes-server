@@ -16,6 +16,7 @@ import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.util.StringUtils;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -259,7 +260,10 @@ public class AsrAudioDevice implements AudioDevice {
                     payload.setType(1);
                     payload.setSearchableContent(message);
                     if(message.contains("[") && message.contains("]")) {
-                        payload.setSearchableContent(message.substring(message.indexOf("]")));
+                        payload.setSearchableContent(message.substring(message.indexOf("]")+1).trim());
+                    }
+                    if(StringUtils.isEmpty(payload.getSearchableContent())) {
+                        return;
                     }
                     IMResult<SendMessageResult> result = robotService.sendMessage(robotId, conversation, payload);
                     if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
