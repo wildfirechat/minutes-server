@@ -103,8 +103,8 @@ public class AsrAudioDevice implements AudioDevice {
             int monoFrames48k = nBuffSize / 4; // 每帧 stereo 占 4 字节
             short[] monoSamples48k = new short[monoFrames48k];
             for (int i = 0, o = 0; i + 3 < nBuffSize; i += 4, o++) {
-                short left = (short) ((sampleData[i] & 0xFF) | (sampleData[i + 1] << 8));
-                short right = (short) ((sampleData[i + 2] & 0xFF) | (sampleData[i + 3] << 8));
+                short left = (short) ((sampleData[i] & 0xFF) | ((sampleData[i + 1] & 0xFF) << 8));
+                short right = (short) ((sampleData[i + 2] & 0xFF) | ((sampleData[i + 3] & 0xFF) << 8));
                 int mono = ((left + right) / 2) * GAIN;
                 if (mono > 32767) mono = 32767;
                 if (mono < -32768) mono = -32768;

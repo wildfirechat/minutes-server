@@ -7,8 +7,8 @@ import cn.wildfirechat.app.llm.MeetingSummaryService;
 import cn.wildfirechat.app.repository.ConferenceParticipantRepository;
 import cn.wildfirechat.app.repository.TranscriptionRecordRepository;
 import cn.wildfirechat.pojos.Conversation;
+import cn.wildfirechat.pojos.OutputMessageData;
 import cn.wildfirechat.sdk.RobotService;
-import cn.wildfirechat.sdk.UserAdmin;
 import cn.wildfirechat.sdk.model.IMResult;
 import dev.onvoid.webrtc.media.video.VideoTrack;
 import org.slf4j.Logger;
@@ -22,20 +22,16 @@ import javax.annotation.PostConstruct;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Executor;
 
 @org.springframework.stereotype.Service
 public class CallService {
     private static final Logger LOG = LoggerFactory.getLogger(CallService.class);
-    @Value("${robot.im_url}")
-    private String robotImUrl;
-
     @Value("${robot.im_id}")
     private String robotImId;
-
-    @Value("${robot.im_secret}")
-    private String robotImSecret;
 
     @Value("${asr.ws.url}")
     private String mWebsocketUrl;
@@ -52,19 +48,29 @@ public class CallService {
     @Autowired
     private MeetingSummaryService meetingSummaryService;
 
+    @Autowired
     private RobotService robotService;
+
+    private RobotSignalServer robotSignalServer;
 
     @Autowired
     @Qualifier("asyncExecutor")
     private Executor executor;
 
-    private final Map<String, CallSession> sessionMap = new ConcurrentHashMap<>();
+    private final Set<String> sessionMap = new ConcurrentSkipListSet<>();
 
     @PostConstruct
     private void init() {
-        this.robotService = new RobotService(robotImUrl, robotImId, robotImSecret);
+        this.robotSignalServer = new RobotSignalServer(robotService);
         //1. 初始化音视频SDK
-        AVEngineKit.getInstance().init(robotService, null);
+        AVEngineKit.getInstance().init(robotImId, robotSignalServer, callSession -> {
+            callSession.setAudioDevice(new AsrAudioDevice(callSession.getConversation(), callSession.getCallId(), robotImId, robotService, transcriptionRecordRepository, mWebsocketUrl, executor));
+            callSession.setEventCallback(new CallCallback(callSession.getCallId()));
+            callSession.setWebinarAudio(true);
+            sessionMap.add(callSession.getCallId());
+            recordParticipant(callSession.getCallId(), callSession.getConversation().getTarget());
+            callSession.answer(true);
+        });
 
         //2. 设置Janus公网IP到内网IP的替换映射
         if (StringUtils.hasText(janusIpReplaceMap)) {
@@ -88,47 +94,55 @@ public class CallService {
 
 
     public void joinConference(String conferenceId, String pin, boolean advance) {
-        if(sessionMap.containsKey(conferenceId)) {
+        if(sessionMap.contains(conferenceId)) {
             return;
         }
 
         Conversation conversation = new Conversation(2, conferenceId, 0);
-        CallSession callSession = AVEngineKit.getInstance().joinConference(conferenceId, pin, true, advance, true, new AsrAudioDevice(conversation, conferenceId, robotImId, robotService, transcriptionRecordRepository, mWebsocketUrl, executor), new CallEventCallback() {
-            @Override
-            public void onCallStateUpdated(CallSession callSession, CallState state) {
-
-            }
-
-            @Override
-            public void onParticipantJoined(CallSession callSession, String userId) {
-                recordParticipant(conferenceId, userId);
-            }
-
-            @Override
-            public void onParticipantConnected(CallSession callSession, String userId) {
-                recordParticipant(conferenceId, userId);
-            }
-
-            @Override
-            public void onReceiveRemoteVideoTrack(CallSession callSession, String userId, VideoTrack videoTrack) {
-
-            }
-
-            @Override
-            public void onParticipantLeft(CallSession callSession, String userId, CallEndReason reason) {
-                if(callSession.getParticipants().isEmpty()) {
-                    callSession.endCall();
-                }
-            }
-
-            @Override
-            public void onCallEnd(CallSession callSession, CallEndReason endReason) {
-                sessionMap.remove(conferenceId);
-                meetingSummaryService.generateAndSendSummary(conferenceId, robotService, robotImId);
-            }
-        });
-        sessionMap.put(conferenceId, callSession);
+        CallSession callSession = AVEngineKit.getInstance().joinConference(conferenceId, pin, true, advance, true, new AsrAudioDevice(conversation, conferenceId, robotImId, robotService, transcriptionRecordRepository, mWebsocketUrl, executor), new CallCallback(conferenceId), 0, null);
+        sessionMap.add(conferenceId);
     }
+
+    private class CallCallback implements CallEventCallback {
+        private final String conferenceId;
+
+        public CallCallback(String conferenceId) {
+            this.conferenceId = conferenceId;
+        }
+
+        @Override
+        public void onCallStateUpdated(CallSession callSession, CallState state) {
+
+        }
+
+        @Override
+        public void onParticipantJoined(CallSession callSession, String userId) {
+            recordParticipant(conferenceId, userId);
+        }
+
+        @Override
+        public void onParticipantConnected(CallSession callSession, String userId) {
+            recordParticipant(conferenceId, userId);
+        }
+
+        @Override
+        public void onReceiveRemoteVideoTrack(CallSession callSession, String userId, VideoTrack videoTrack) {
+
+        }
+
+        @Override
+        public void onParticipantLeft(CallSession callSession, String userId, CallEndReason reason) {
+            if(callSession.getParticipants().isEmpty()) {
+                callSession.endCall();
+            }
+        }
+
+        @Override
+        public void onCallEnd(CallSession callSession, CallEndReason endReason) {
+            sessionMap.remove(conferenceId);
+            meetingSummaryService.generateAndSendSummary(conferenceId, robotImId);
+        }
+    };
 
     private static final String SCREEN_SHARING_PREFIX = "screen_sharing_";
 
@@ -162,7 +176,7 @@ public class CallService {
 
     private boolean checkParticipantPermission(String userId) {
         try {
-            IMResult<cn.wildfirechat.pojos.InputOutputUserInfo> imResult = UserAdmin.getUserByUserId(userId);
+            IMResult<cn.wildfirechat.pojos.InputOutputUserInfo> imResult = robotService.getUserInfo(userId);
             if (imResult != null && imResult.getErrorCode() == cn.wildfirechat.common.ErrorCode.ERROR_CODE_SUCCESS) {
                 return imResult.getResult() != null;
             }
@@ -174,5 +188,9 @@ public class CallService {
 
     public void onConferenceEvent(String event) {
         AVEngineKit.getInstance().onConferenceEvent(event);
+    }
+
+    public void onReceiveMessage(OutputMessageData messageData) {
+        AVEngineKit.getInstance().onReceiveCallMessage(messageData);
     }
 }

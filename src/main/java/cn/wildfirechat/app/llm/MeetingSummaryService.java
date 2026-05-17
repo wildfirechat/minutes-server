@@ -11,12 +11,12 @@ import cn.wildfirechat.pojos.Conversation;
 import cn.wildfirechat.pojos.InputOutputUserInfo;
 import cn.wildfirechat.pojos.MessagePayload;
 import cn.wildfirechat.sdk.RobotService;
-import cn.wildfirechat.sdk.UserAdmin;
 import cn.wildfirechat.sdk.model.IMResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -68,8 +68,11 @@ public class MeetingSummaryService {
     @Qualifier("messageUpdateExecutor")
     private Executor executor;
 
+    @Autowired
+    private RobotService robotService;
+
     @Async("asyncExecutor")
-    public void generateAndSendSummary(String conferenceId, RobotService robotService, String robotId) {
+    public void generateAndSendSummary(String conferenceId, String robotId) {
         LOG.info("Start generating meeting summary for conferenceId={}", conferenceId);
 
         try {
@@ -82,7 +85,7 @@ public class MeetingSummaryService {
                 return;
             }
 
-            correctTranscriptions(conferenceId, robotService);
+            correctTranscriptions(conferenceId);
 
             String summary = generateSummary(conferenceId);
             if (summary == null || summary.isEmpty()) {
@@ -197,7 +200,7 @@ public class MeetingSummaryService {
         return llmService.chat(finalSystem, finalUser);
     }
 
-    private void correctTranscriptions(String conferenceId, RobotService robotService) {
+    private void correctTranscriptions(String conferenceId) {
         String systemPrompt = "你是一个专业的语音识别文本矫正助手。请对以下语音识别转写文本进行逐条矫正。主要修正：\n" +
                 "1. 同音字、错别字\n" +
                 "2. 专有名词（人名、公司名、技术术语等）\n" +
@@ -221,13 +224,13 @@ public class MeetingSummaryService {
             String originalText = buildOriginalText(records, totalOffset);
 
             if (!llmService.isExceedContext(systemPrompt, originalText)) {
-                doCorrectBatch(records, totalOffset, systemPrompt, originalText, conferenceId, robotService);
+                doCorrectBatch(records, totalOffset, systemPrompt, originalText, conferenceId);
             } else {
                 LOG.info("Transcription too long for conferenceId={}, switch to batch correction mode, page={}, records={}", conferenceId, pageNumber, records.size());
                 for (int i = 0; i < records.size(); i += BATCH_SIZE) {
                     List<TranscriptionRecord> batch = records.subList(i, Math.min(i + BATCH_SIZE, records.size()));
                     String batchText = buildOriginalText(batch, totalOffset + i);
-                    doCorrectBatch(batch, totalOffset + i, systemPrompt, batchText, conferenceId, robotService);
+                    doCorrectBatch(batch, totalOffset + i, systemPrompt, batchText, conferenceId);
                 }
             }
 
@@ -249,7 +252,7 @@ public class MeetingSummaryService {
         }
     }
 
-    private void doCorrectBatch(List<TranscriptionRecord> records, int offset, String systemPrompt, String originalText, String conferenceId, RobotService robotService) {
+    private void doCorrectBatch(List<TranscriptionRecord> records, int offset, String systemPrompt, String originalText, String conferenceId) {
         try {
             String userPrompt = "请矫正以下语音识别文本（保持编号格式返回）：\n\n" + originalText;
             String correctedText = llmService.chat(systemPrompt, userPrompt);
@@ -290,8 +293,8 @@ public class MeetingSummaryService {
                             MessagePayload payload = new MessagePayload();
                             payload.setType(1);
                             payload.setSearchableContent(task.correctedContent);
-                            if(task.correctedContent.contains("]")) {
-                                payload.setSearchableContent(task.correctedContent.substring(task.correctedContent.indexOf("]")));
+                            if(task.correctedContent.contains("[") && task.correctedContent.contains("]")) {
+                                payload.setSearchableContent(task.correctedContent.substring(task.correctedContent.indexOf("]") + 1).trim());
                             }
                             IMResult<Void> updateResult = robotService.updateMessage(task.messageId, payload, false);
                             if (updateResult != null && updateResult.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
@@ -327,7 +330,7 @@ public class MeetingSummaryService {
             return formatDisplayName(entry.displayName, screenSharing);
         }
         try {
-            IMResult<InputOutputUserInfo> result = UserAdmin.getUserByUserId(realUserId);
+            IMResult<InputOutputUserInfo> result = robotService.getUserInfo(realUserId);
             if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS && result.getResult() != null) {
                 String displayName = result.getResult().getDisplayName();
                 if (displayName == null || displayName.isEmpty()) {

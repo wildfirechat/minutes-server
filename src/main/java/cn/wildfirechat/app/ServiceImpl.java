@@ -30,6 +30,8 @@ public class ServiceImpl implements Service {
     public void onReceiveMessage(OutputMessageData messageData) {
         LOG.info("on receive message {}", messageData.getMessageId());
 
+        callService.onReceiveMessage(messageData);
+
         if(messageData.getPayload().getType() == 408) {
             try {
                 String conferenceId = messageData.getPayload().getContent();
