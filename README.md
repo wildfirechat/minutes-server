@@ -39,9 +39,10 @@ minutes-server/
 mvn spring-boot:run
 
 # 或打包后运行
-mvn package -DskipTests
+mvn clean -Djavacpp.platform=linux-x86_64 package -DskipTests
 java -jar target/minutes-server-0.1.jar
 ```
+> 只支持linux x86_64和maxos arm64这2个平台，其他平台不支持。
 
 ### 前端
 
