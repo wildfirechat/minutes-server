@@ -262,7 +262,7 @@ public class AsrAudioDevice implements AudioDevice {
             long timestampMs = Long.parseLong(matcher.group(1));
             double duration = Double.parseDouble(matcher.group(2));
             String content = matcher.group(3);
-            String segmentName = conferenceId + "--" + userId + "-[" + timestampMs + "+" + duration + "]";
+            String segmentName = conferenceId + "--" + userId + "-[" + matcher.group(1) + "+" + matcher.group(2) + "]";
 
             TranscriptionRecord record = new TranscriptionRecord();
 
