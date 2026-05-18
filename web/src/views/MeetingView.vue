@@ -46,6 +46,11 @@
         <template #header>
           <div class="card-header">
             <span>🎙️ 会议转写 ({{ meeting?.transcriptions?.length || 0 }})</span>
+            <el-switch
+              v-model="autoPlay"
+              active-text="自动播放"
+              inline-prompt
+            />
           </div>
         </template>
 
@@ -53,6 +58,7 @@
           <el-timeline-item
             v-for="item in meeting.transcriptions"
             :key="item.id"
+            :id="`transcription-${item.id}`"
             :timestamp="formatTimestampMs(item.timestampMs)"
             placement="top"
           >
@@ -73,7 +79,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { UserFilled, DocumentCopy } from '@element-plus/icons-vue'
@@ -88,6 +94,7 @@ const loading = ref(false)
 const meeting = ref(null)
 const currentAudio = ref(null)
 const playingId = ref(null)
+const autoPlay = ref(false)
 
 function displayNameOf(userId) {
   if (!meeting.value?.userDisplayNameMap) return userId
@@ -135,6 +142,8 @@ function formatTimestampMs(ms) {
   return `${h}:${m}:${s}`
 }
 
+let playErrorHandled = false
+
 function playAudio(url, id) {
   if (currentAudio.value) {
     currentAudio.value.pause()
@@ -144,20 +153,63 @@ function playAudio(url, id) {
     playingId.value = null
     return
   }
+  playErrorHandled = false
   const audio = new Audio(url)
   audio.onended = () => {
     playingId.value = null
+    if (autoPlay.value) {
+      playNext(id)
+    }
   }
   audio.onerror = () => {
+    if (playErrorHandled) return
+    playErrorHandled = true
     ElMessage.error('音频播放失败')
     playingId.value = null
+    if (autoPlay.value) {
+      playNext(id)
+    }
   }
   audio.play().catch(err => {
+    if (playErrorHandled) return
+    playErrorHandled = true
     ElMessage.error('音频播放失败: ' + err.message)
     playingId.value = null
+    if (autoPlay.value) {
+      playNext(id)
+    }
   })
   currentAudio.value = audio
   playingId.value = id
+
+  if (autoPlay.value) {
+    nextTick(() => {
+      scrollToItem(id)
+    })
+  }
+}
+
+function scrollToItem(id) {
+  const el = document.getElementById(`transcription-${id}`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+function playNext(currentId) {
+  if (!meeting.value?.transcriptions?.length) return
+  const list = meeting.value.transcriptions
+  const currentIndex = list.findIndex(t => t.id === currentId)
+  if (currentIndex === -1) return
+  for (let i = currentIndex + 1; i < list.length; i++) {
+    if (list[i].audioUrl) {
+      // 延迟 300ms 避免前一个 audio 的 cleanup 与下一个的创建产生竞态
+      setTimeout(() => {
+        playAudio(list[i].audioUrl, list[i].id)
+      }, 300)
+      break
+    }
+  }
 }
 
 async function fetchData() {

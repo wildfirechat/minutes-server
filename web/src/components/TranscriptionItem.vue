@@ -1,5 +1,5 @@
 <template>
-  <div class="transcription-item">
+  <div class="transcription-item" :class="{ playing: isPlaying }">
     <div v-if="showSpeaker" class="transcription-header">
       <el-avatar :size="28" :icon="UserFilled" />
       <span class="speaker-name">{{ speakerName || item.userId }}</span>
@@ -53,11 +53,18 @@ function handlePlay() {
   background: #fafafa;
   border-radius: 8px;
   padding: 12px 16px;
-  transition: background 0.2s;
+  transition: all 0.2s;
+  border-left: 3px solid transparent;
 }
 
 .transcription-item:hover {
   background: #f0f9ff;
+}
+
+.transcription-item.playing {
+  background: #ecf5ff;
+  border-left-color: #409eff;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.12);
 }
 
 .transcription-header {

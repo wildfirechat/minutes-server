@@ -1,5 +1,6 @@
 package cn.wildfirechat.app.llm;
 
+import cn.wildfirechat.app.call.AsrAudioDevice;
 import cn.wildfirechat.app.entity.ConferenceParticipant;
 import cn.wildfirechat.app.entity.MeetingSummary;
 import cn.wildfirechat.app.entity.TranscriptionRecord;
@@ -11,6 +12,8 @@ import cn.wildfirechat.pojos.Conversation;
 import cn.wildfirechat.pojos.InputOutputUserInfo;
 import cn.wildfirechat.pojos.MessagePayload;
 import cn.wildfirechat.sdk.RobotService;
+import cn.wildfirechat.sdk.messagecontent.MeetingMinutesMessageContent;
+import cn.wildfirechat.sdk.messagecontent.TranscriptionMessageContent;
 import cn.wildfirechat.sdk.model.IMResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -117,10 +120,12 @@ public class MeetingSummaryService {
             for (String userId : participantUserIds) {
                 try {
                     Conversation conversation = new Conversation(0, userId, 0);
-                    MessagePayload payload = new MessagePayload();
-                    payload.setType(1);
-                    payload.setSearchableContent("【会议纪要】\n\n" + summary);
-                    IMResult<cn.wildfirechat.pojos.SendMessageResult> result = robotService.sendMessage(robotId, conversation, payload);
+                    MeetingMinutesMessageContent meetingContent = new MeetingMinutesMessageContent();
+                    meetingContent.setText("【会议纪要】\n\n" + summary);
+                    meetingContent.setMeetingId(conferenceId);
+                    meetingContent.setTitle("【会议纪要】");
+
+                    IMResult<cn.wildfirechat.pojos.SendMessageResult> result = robotService.sendMessage(robotId, conversation, meetingContent.encode());
                     if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
                         LOG.info("Sent meeting summary to userId={} for conferenceId={}", userId, conferenceId);
                     } else {
@@ -244,11 +249,13 @@ public class MeetingSummaryService {
         final long messageId;
         final String correctedContent;
         final Long recordId;
+        final String userId;
 
-        MessageUpdateTask(long messageId, String correctedContent, Long recordId) {
+        MessageUpdateTask(long messageId, String correctedContent, Long recordId, String userId) {
             this.messageId = messageId;
             this.correctedContent = correctedContent;
             this.recordId = recordId;
+            this.userId = userId;
         }
     }
 
@@ -276,7 +283,7 @@ public class MeetingSummaryService {
                         matchedCount++;
 
                         if (robotService != null && record.getMessageId() != null && record.getMessageId() > 0) {
-                            updateTasks.add(new MessageUpdateTask(record.getMessageId(), correctedContent, record.getId()));
+                            updateTasks.add(new MessageUpdateTask(record.getMessageId(), correctedContent, record.getId(), record.getUserId()));
                         }
                     }
                 }
@@ -285,30 +292,6 @@ public class MeetingSummaryService {
             transcriptionRecordRepository.saveAll(records);
             LOG.info("Transcription correction completed for batch offset={}, conferenceId={}, matched={}/{}",
                     offset, conferenceId, matchedCount, records.size());
-
-            if (!updateTasks.isEmpty() && executor != null) {
-                executor.execute(() -> {
-                    for (MessageUpdateTask task : updateTasks) {
-                        try {
-                            MessagePayload payload = new MessagePayload();
-                            payload.setType(1);
-                            payload.setSearchableContent(task.correctedContent);
-                            if(task.correctedContent.contains("[") && task.correctedContent.contains("]")) {
-                                payload.setSearchableContent(task.correctedContent.substring(task.correctedContent.indexOf("]") + 1).trim());
-                            }
-                            IMResult<Void> updateResult = robotService.updateMessage(task.messageId, payload, false);
-                            if (updateResult != null && updateResult.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
-                                LOG.info("Updated message content for record id={}, messageId={}", task.recordId, task.messageId);
-                            } else {
-                                LOG.error("Failed to update message content for record id={}, messageId={}, code={}", task.recordId, task.messageId, updateResult != null ? updateResult.getCode() : "null");
-                            }
-                            Thread.sleep(100);
-                        } catch (Exception ex) {
-                            LOG.error("Failed to update message content for record id={}, messageId={}", task.recordId, task.messageId, ex);
-                        }
-                    }
-                });
-            }
         } catch (Exception e) {
             LOG.error("Failed to correct transcriptions for batch offset={}, conferenceId={}", offset, conferenceId, e);
         }

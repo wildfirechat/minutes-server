@@ -49,6 +49,9 @@ public class WebLoginController {
     @Value("${audio.base.url:}")
     private String audioBaseUrl;
 
+    @Value("${audio.file.extension:wav}")
+    private String audioFileExtension;
+
     @Autowired
     private SessionService sessionService;
 
@@ -255,9 +258,9 @@ public class WebLoginController {
             }
             try {
                 String encodedSegment = java.net.URLEncoder.encode(record.getSegmentName(), "UTF-8");
-                dto.setAudioUrl(base + encodedSegment);
+                dto.setAudioUrl(base + encodedSegment + "." + audioFileExtension);
             } catch (java.io.UnsupportedEncodingException e) {
-                dto.setAudioUrl(base + record.getSegmentName());
+                dto.setAudioUrl(base + record.getSegmentName() + "." + audioFileExtension);
             }
         }
 

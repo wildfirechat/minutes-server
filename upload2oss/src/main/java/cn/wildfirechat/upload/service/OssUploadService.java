@@ -11,10 +11,12 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -31,6 +33,12 @@ public class OssUploadService {
     @Value("${audio.local.dir}")
     private String localAudioDir;
 
+    @Value("${audio.transcode.enabled:false}")
+    private boolean transcodeEnabled;
+
+    @Value("${audio.transcode.format:mp3}")
+    private String transcodeFormat;
+
     @Value("${upload.delete-after-upload:false}")
     private boolean deleteAfterUpload;
 
@@ -39,7 +47,8 @@ public class OssUploadService {
 
     @PostConstruct
     public void init() {
-        LOG.info("OssUploadService initialized. localDir={}, bucket={}", localAudioDir, bucketName);
+        LOG.info("OssUploadService initialized. localDir={}, bucket={}, transcodeEnabled={}, transcodeFormat={}",
+                localAudioDir, bucketName, transcodeEnabled, transcodeFormat);
     }
 
     @PreDestroy
@@ -50,7 +59,8 @@ public class OssUploadService {
     }
 
     /**
-     * 定时扫描本地音频目录，只上传 .wav 文件，上传成功后删除本地文件
+     * 定时扫描本地音频目录，只上传指定后缀文件。
+     * 若开启转码，先调用 ffmpeg 转成目标格式后再上传。
      */
     @Scheduled(fixedRateString = "${upload.scan-interval:300000}")
     public void scanAndUpload() {
@@ -60,50 +70,119 @@ public class OssUploadService {
             return;
         }
 
-        List<Path> wavFiles;
+        String sourceExt = ".wav";
+        List<Path> sourceFiles;
         try (Stream<Path> stream = Files.list(audioDir)) {
-            wavFiles = stream
+            sourceFiles = stream
                     .filter(Files::isRegularFile)
-                    .filter(p -> p.toString().toLowerCase().endsWith(".wav"))
+                    .filter(p -> p.toString().toLowerCase().endsWith(sourceExt))
                     .collect(Collectors.toList());
         } catch (Exception e) {
             LOG.error("Failed to list audio directory", e);
             return;
         }
 
-        if (wavFiles.isEmpty()) {
+        if (sourceFiles.isEmpty()) {
             LOG.debug("No wav files found in {}", localAudioDir);
             return;
         }
 
-        LOG.info("Found {} wav file(s) to upload", wavFiles.size());
+        LOG.info("Found {} wav file(s) to upload", sourceFiles.size());
 
-        for (Path filePath : wavFiles) {
-            String fileName = filePath.getFileName().toString();
+        for (Path sourcePath : sourceFiles) {
+            String sourceFileName = sourcePath.getFileName().toString();
+            String targetFileName = transcodeEnabled
+                    ? sourceFileName.substring(0, sourceFileName.length() - sourceExt.length()) + "." + transcodeFormat.toLowerCase()
+                    : sourceFileName;
+            Path targetPath = transcodeEnabled ? sourcePath.resolveSibling(targetFileName) : sourcePath;
 
-            // 检查 OSS 上是否已存在（通过 segmentName 判断）
-            String ossKey = "audio/" + fileName;
+            String ossKey = "audio/" + targetFileName;
+
+            // 检查 OSS 上是否已存在（通过目标文件名判断）
             if (ossClient.doesObjectExist(bucketName, ossKey)) {
-                LOG.debug("Already exists in OSS: {}", fileName);
-                // 已存在则直接删除本地文件
-                deleteLocalFile(filePath);
+                LOG.debug("Already exists in OSS: {}", targetFileName);
+                // 已存在则删除本地源文件及可能的转码残留文件
+                deleteLocalFile(sourcePath);
+                if (transcodeEnabled) {
+                    deleteLocalFile(targetPath);
+                }
                 continue;
             }
 
+            // 若开启转码，先执行 ffmpeg
+            if (transcodeEnabled) {
+                boolean transcoded = transcode(sourcePath, targetPath);
+                if (!transcoded) {
+                    LOG.error("Skip upload due to transcode failure: {}", sourceFileName);
+                    continue;
+                }
+            }
+
             try {
-                PutObjectRequest putObjectRequest = new PutObjectRequest(bucketName, ossKey, filePath.toFile());
+                File uploadFile = targetPath.toFile();
+                if (!uploadFile.exists()) {
+                    LOG.error("Upload file does not exist: {}", targetFileName);
+                    continue;
+                }
+
+                PutObjectRequest putObjectRequest = new PutObjectRequest(bucketName, ossKey, uploadFile);
                 ossClient.putObject(putObjectRequest);
 
                 String audioUrl = ossBaseUrl + "/" + ossKey;
-                LOG.info("Uploaded to OSS: {} -> {}", fileName, audioUrl);
+                LOG.info("Uploaded to OSS: {} -> {}", targetFileName, audioUrl);
 
                 // 根据配置决定是否删除本地文件
                 if (deleteAfterUpload) {
-                    deleteLocalFile(filePath);
+                    deleteLocalFile(sourcePath);
+                    if (transcodeEnabled) {
+                        deleteLocalFile(targetPath);
+                    }
                 }
             } catch (Exception e) {
-                LOG.error("Failed to upload audio file: {}", fileName, e);
+                LOG.error("Failed to upload audio file: {}", targetFileName, e);
             }
+        }
+    }
+
+    /**
+     * 调用 ffmpeg 将源文件转码为目标格式
+     */
+    private boolean transcode(Path sourcePath, Path targetPath) {
+        String targetFileName = targetPath.getFileName().toString();
+        try {
+            if (Files.exists(targetPath)) {
+                LOG.debug("Target file already exists, skip transcode: {}", targetFileName);
+                return true;
+            }
+
+            ProcessBuilder pb = new ProcessBuilder(
+                    "ffmpeg",
+                    "-i", sourcePath.toString(),
+                    "-y",
+                    targetPath.toString()
+            );
+            pb.redirectErrorStream(true);
+            pb.inheritIO();
+            Process process = pb.start();
+
+            boolean finished = process.waitFor(60, TimeUnit.SECONDS);
+            if (!finished) {
+                LOG.error("Transcode timeout for file: {}", sourcePath.getFileName().toString());
+                process.destroyForcibly();
+                return false;
+            }
+
+            int exitCode = process.exitValue();
+            if (exitCode != 0) {
+                LOG.error("Transcode failed with exit code {}: {}", exitCode, sourcePath.getFileName().toString());
+                return false;
+            }
+
+            LOG.info("Transcoded: {} -> {}", sourcePath.getFileName().toString(), targetFileName);
+            return true;
+        } catch (Exception e) {
+            LOG.error("Transcode exception for file: {}", sourcePath.getFileName().toString(), e);
+            return false;
         }
     }
 

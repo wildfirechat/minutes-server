@@ -11,6 +11,7 @@ import cn.wildfirechat.pojos.Conversation;
 import cn.wildfirechat.pojos.MessagePayload;
 import cn.wildfirechat.pojos.SendMessageResult;
 import cn.wildfirechat.sdk.RobotService;
+import cn.wildfirechat.sdk.messagecontent.TranscriptionMessageContent;
 import cn.wildfirechat.sdk.model.IMResult;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -34,7 +35,7 @@ import java.util.regex.Pattern;
 
 public class AsrAudioDevice implements AudioDevice {
     private static final Logger LOG = LoggerFactory.getLogger(AsrAudioDevice.class);
-    private static final Pattern MESSAGE_PATTERN = Pattern.compile("\\[(\\d+)\\+([\\d.]+)\\](.*)");
+    public static final Pattern MESSAGE_PATTERN = Pattern.compile("\\[(\\d+)\\+([\\d.]+)\\](.*)");
     private static final String SCREEN_SHARING_PREFIX = "screen_sharing_";
     private static final int WRITE_BATCH_SIZE = 50;
     private final List<TranscriptionRecord> writeBuffer = new ArrayList<>();
@@ -253,63 +254,62 @@ public class AsrAudioDevice implements AudioDevice {
         }
 
         private void handleTranscriptionMessage(String message) {
+            Matcher matcher = MESSAGE_PATTERN.matcher(message);
+            if (!matcher.matches()) {
+                return;
+            }
+
+            long timestampMs = Long.parseLong(matcher.group(1));
+            double duration = Double.parseDouble(matcher.group(2));
+            String content = matcher.group(3);
+            String segmentName = conferenceId + "--" + userId + "-[" + timestampMs + "+" + duration + "]";
+
             TranscriptionRecord record = new TranscriptionRecord();
-            if (robotService != null && conversation != null) {
-                try {
-                    MessagePayload payload = new MessagePayload();
-                    payload.setType(1);
-                    payload.setSearchableContent(message);
-                    if(message.contains("[") && message.contains("]")) {
-                        payload.setSearchableContent(message.substring(message.indexOf("]")+1).trim());
-                    }
-                    if(StringUtils.isEmpty(payload.getSearchableContent())) {
-                        return;
-                    }
-                    IMResult<SendMessageResult> result = robotService.sendMessage(robotId, conversation, payload);
-                    if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
-                        LOG.info("Send websocket text message success");
-                        if (result.getResult() != null) {
-                            record.setMessageId(result.getResult().getMessageUid());
-                        }
-                    } else {
-                        LOG.error("Send websocket text message error {}", result != null ? result.getCode() : "null");
-                    }
-                } catch (Exception e) {
-                    LOG.error("Send websocket text message exception", e);
+
+            try {
+                if(message.contains("[") && message.contains("]")) {
+                    message = (message.substring(message.indexOf("]")+1).trim());
                 }
+                if(StringUtils.isEmpty(message)) {
+                    return;
+                }
+                TranscriptionMessageContent msgcontent = new TranscriptionMessageContent();
+                msgcontent.setTranscriptionId(timestampMs);
+                msgcontent.setTimestamp(timestampMs);
+                msgcontent.setMeetingId(conferenceId);
+                msgcontent.setUserId(userId);
+                msgcontent.setContent(message);
+                msgcontent.setDuration((int)(duration*1000));
+
+                IMResult<SendMessageResult> result = robotService.sendMessage(robotId, conversation, msgcontent.encode());
+                if (result != null && result.getErrorCode() == ErrorCode.ERROR_CODE_SUCCESS) {
+                    LOG.info("Send websocket text message success");
+                    if (result.getResult() != null) {
+                        record.setMessageId(result.getResult().getMessageUid());
+                    }
+                } else {
+                    LOG.error("Send websocket text message error {}", result != null ? result.getCode() : "null");
+                }
+            } catch (Exception e) {
+                LOG.error("Send websocket text message exception", e);
             }
 
             // 解析 [timestamp_ms+duration]text 格式
-            if (transcriptionRecordRepository != null) {
-                try {
-                    Matcher matcher = MESSAGE_PATTERN.matcher(message);
-                    if (matcher.matches()) {
-                        long timestampMs = Long.parseLong(matcher.group(1));
-                        double duration = Double.parseDouble(matcher.group(2));
-                        String content = matcher.group(3);
+            record.setConferenceId(conferenceId);
+            record.setUserId(realUserId);
+            record.setTimestampMs(timestampMs);
+            record.setDuration((int)(duration*1000));
+            record.setContent(content);
+            record.setScreenSharing(screenSharing);
 
-                        record.setConferenceId(conferenceId);
-                        record.setUserId(realUserId);
-                        record.setTimestampMs(timestampMs);
-                        record.setDuration((int)(duration*1000));
-                        record.setContent(content);
-                        record.setScreenSharing(screenSharing);
-                        String segmentName = conferenceId + "--" + userId + "-[" + timestampMs + "+" + duration + "]";
-                        record.setSegmentName(segmentName);
-                        synchronized (writeBuffer) {
-                            writeBuffer.add(record);
-                            if (writeBuffer.size() >= WRITE_BATCH_SIZE) {
-                                flushWriteBuffer();
-                            }
-                        }
-                        LOG.info("Buffered transcription record for batch save, conferenceId={}, userId={}, screenSharing={}, timestampMs={}", conferenceId, realUserId, screenSharing, timestampMs);
-                    } else {
-                        LOG.warn("Received websocket text does not match expected pattern: {}", message);
-                    }
-                } catch (Exception e) {
-                    LOG.error("Failed to save transcription record", e);
+            record.setSegmentName(segmentName);
+            synchronized (writeBuffer) {
+                writeBuffer.add(record);
+                if (writeBuffer.size() >= WRITE_BATCH_SIZE) {
+                    flushWriteBuffer();
                 }
             }
+            LOG.info("Buffered transcription record for batch save, conferenceId={}, userId={}, screenSharing={}, timestampMs={}", conferenceId, realUserId, screenSharing, timestampMs);
         }
     }
 
@@ -335,9 +335,9 @@ public class AsrAudioDevice implements AudioDevice {
 
     public AsrAudioDevice(Conversation conversation, String conferenceId, String robotId, RobotService robotService, TranscriptionRecordRepository transcriptionRecordRepository, String websocketUrl, Executor executor) {
         this.conversation = conversation;
+        this.conferenceId = conferenceId;
         this.robotId = robotId;
         this.robotService = robotService;
-        this.conferenceId = conferenceId;
         this.transcriptionRecordRepository = transcriptionRecordRepository;
         this.websocketUrl = websocketUrl;
         this.executor = executor;

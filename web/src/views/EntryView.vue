@@ -22,6 +22,7 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Loading } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { login, getAccount, getConfigData } from '@/api'
 import wf from '@/jssdk/wf'
@@ -64,7 +65,7 @@ watch(status, (val) => {
 
 async function getAccountInfo() {
   try {
-    const res = await getAccount()
+    const res = await getAccount({ silent: true })
     if (res.data.code === 0 && res.data.data) {
       authStore.setUserInfo(res.data.data)
       return true
@@ -152,7 +153,7 @@ async function doLogin() {
     loginStatus.value = 1
   } else {
     loadingText.value = '正在登录...'
-    authStore.clearAuth()
+    // 不要清除 conferenceId / robotId，它们是从 URL 获取的本次会话参数
   }
 }
 

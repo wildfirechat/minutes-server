@@ -36,6 +36,10 @@ api.interceptors.response.use(
     if (error.response) {
       const status = error.response.status
       const data = error.response.data
+      // 静默请求（如登录前的 getAccount 探测）遇到 401 不弹窗、不刷新
+      if (status === 401 && error.config?.silent) {
+        return Promise.reject(error)
+      }
       if (status === 401) {
         ElMessage.error(data?.message || '登录已过期，请重新访问')
         // 清除本地 token
@@ -57,7 +61,7 @@ api.interceptors.response.use(
 
 export const login = (data) => api.post('/webapi/login', data)
 
-export const getAccount = () => api.get('/webapi/account')
+export const getAccount = (config = {}) => api.get('/webapi/account', config)
 
 export const getConfigData = () => api.get('/webapi/config')
 
