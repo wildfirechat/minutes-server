@@ -4,14 +4,12 @@ import { ref, computed } from 'vue'
 export const useAuthStore = defineStore('auth', () => {
   const userInfo = ref(null)
   const conferenceId = ref('')
-  const robotId = ref('')
   const authToken = ref(localStorage.getItem('authToken') || '')
 
   const isLoggedIn = computed(() => !!userInfo.value && !!authToken.value)
 
   function setParams(params) {
     conferenceId.value = params.conferenceId || ''
-    robotId.value = params.robotId || ''
   }
 
   function setUserInfo(info) {
@@ -26,7 +24,6 @@ export const useAuthStore = defineStore('auth', () => {
   function clearAuth() {
     userInfo.value = null
     conferenceId.value = ''
-    robotId.value = ''
     authToken.value = ''
     localStorage.removeItem('authToken')
   }
@@ -34,7 +31,6 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     userInfo,
     conferenceId,
-    robotId,
     authToken,
     isLoggedIn,
     setParams,

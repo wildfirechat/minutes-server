@@ -135,17 +135,8 @@ public class WebLoginController {
      */
     @PostMapping("/login")
     public Result<LoginResponse> login(@RequestBody LoginRequest request, HttpServletResponse response) {
-        if (request.getRobotId() == null || request.getRobotId().isEmpty()) {
-            return Result.error(ErrorCode.PARAM_ERROR, "缺少robotId");
-        }
         if (request.getAuthCode() == null || request.getAuthCode().isEmpty()) {
             return Result.error(ErrorCode.PARAM_ERROR, "缺少authCode");
-        }
-
-        // 验证 robotId 是否匹配当前配置的机器人
-        if (!robotImId.equals(request.getRobotId())) {
-            LOG.warn("RobotId mismatch, expected={}, actual={}", robotImId, request.getRobotId());
-            return Result.error(ErrorCode.PARAM_ERROR, "机器人ID不匹配");
         }
 
         String authCode = decodeAuthCode(request.getAuthCode());

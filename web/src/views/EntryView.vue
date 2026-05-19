@@ -40,14 +40,12 @@ const configStatus = ref(0) // 0: 认证中, 1: 成功, -1: 失败
 function getQueryParams() {
   const search = new URLSearchParams(window.location.search)
   return {
-    conferenceId: search.get('conferenceId') || '',
-    robotId: search.get('robotId') || ''
+    conferenceId: search.get('conferenceId') || ''
   }
 }
 
 function validateParams(params) {
   if (!params.conferenceId) return '缺少 conferenceId'
-  if (!params.robotId) return '缺少 robotId'
   return null
 }
 
@@ -117,13 +115,16 @@ async function doLogin() {
     wf.biz.getAuthCode(configData.appId, configData.appType, async (authCode) => {
       try {
         const res = await login({
-          robotId: params.robotId,
           authCode: authCode
         })
         if (res.data.code !== 0) {
           throw new Error(res.data.message || '登录失败')
         }
         authStore.setUserInfo(res.data.data)
+        const authToken = res.headers['authtoken'] || res.headers['authToken']
+        if (authToken) {
+          authStore.setAuthToken(authToken)
+        }
         loginStatus.value = 1
         ElMessage.success('登录成功')
       } catch (err) {
