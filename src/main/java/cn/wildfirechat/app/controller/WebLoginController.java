@@ -179,7 +179,7 @@ public class WebLoginController {
         }
 
         // 检查参会者权限
-        if (!conferenceParticipantRepository.findByConferenceIdAndUserId(conferenceId, userId).isPresent()) {
+        if (!conferenceParticipantRepository.findFirstByConferenceIdAndUserId(conferenceId, userId).isPresent()) {
             throw new BizException(ErrorCode.UNAUTHORIZED, "您不是该会议的参会人员，无权查询");
         }
 

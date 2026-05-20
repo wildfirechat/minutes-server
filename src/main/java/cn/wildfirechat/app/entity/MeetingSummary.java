@@ -23,9 +23,19 @@ public class MeetingSummary {
     @Temporal(TemporalType.TIMESTAMP)
     private Date createdAt;
 
+    @Column(name = "updated_at")
+    @Temporal(TemporalType.TIMESTAMP)
+    private Date updatedAt;
+
     @PrePersist
     protected void onCreate() {
         createdAt = new Date();
+        updatedAt = new Date();
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = new Date();
     }
 
     public Long getId() {
@@ -58,5 +68,13 @@ public class MeetingSummary {
 
     public void setCreatedAt(Date createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Date getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Date updatedAt) {
+        this.updatedAt = updatedAt;
     }
 }

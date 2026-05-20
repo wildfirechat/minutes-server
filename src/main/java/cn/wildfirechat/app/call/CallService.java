@@ -13,6 +13,7 @@ import cn.wildfirechat.sdk.model.IMResult;
 import dev.onvoid.webrtc.media.video.VideoTrack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -161,14 +162,22 @@ public class CallService {
             String realUserId = extractRealUserId(userId);
             boolean hasPermission = checkParticipantPermission(realUserId);
 
-            ConferenceParticipant participant = new ConferenceParticipant();
-            participant.setConferenceId(conferenceId);
-            participant.setUserId(realUserId);
-            participant.setHasPermission(hasPermission);
-            participant.setJoinedAt(new Date());
+            Optional<ConferenceParticipant> existing = conferenceParticipantRepository.findFirstByConferenceIdAndUserId(conferenceId, realUserId);
+            ConferenceParticipant participant;
+            if (existing.isPresent()) {
+                participant = existing.get();
+                participant.setHasPermission(hasPermission);
+                participant.setJoinedAt(new Date());
+                LOG.info("Updated participant conferenceId={}, userId={}, realUserId={}, hasPermission={}", conferenceId, userId, realUserId, hasPermission);
+            } else {
+                participant = new ConferenceParticipant();
+                participant.setConferenceId(conferenceId);
+                participant.setUserId(realUserId);
+                participant.setHasPermission(hasPermission);
+                participant.setJoinedAt(new Date());
+                LOG.info("Recorded new participant conferenceId={}, userId={}, realUserId={}, hasPermission={}", conferenceId, userId, realUserId, hasPermission);
+            }
             conferenceParticipantRepository.save(participant);
-
-            LOG.info("Recorded participant conferenceId={}, userId={}, realUserId={}, hasPermission={}", conferenceId, userId, realUserId, hasPermission);
         } catch (Exception e) {
             LOG.error("Failed to record participant", e);
         }

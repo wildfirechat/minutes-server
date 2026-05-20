@@ -31,7 +31,7 @@ public class RecordController {
     private MeetingSummaryRepository meetingSummaryRepository;
 
     private void checkParticipantPermission(String conferenceId, String userId) {
-        if (!conferenceParticipantRepository.findByConferenceIdAndUserId(conferenceId, userId).isPresent()) {
+        if (!conferenceParticipantRepository.findFirstByConferenceIdAndUserId(conferenceId, userId).isPresent()) {
             throw new BizException(ErrorCode.UNAUTHORIZED, "您不是该会议的参会人员，无权查询");
         }
     }

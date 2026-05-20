@@ -14,7 +14,7 @@ public interface ConferenceParticipantRepository extends JpaRepository<Conferenc
 
     List<ConferenceParticipant> findByConferenceIdOrderByCreatedAtDesc(String conferenceId);
 
-    Optional<ConferenceParticipant> findByConferenceIdAndUserId(String conferenceId, String userId);
+    Optional<ConferenceParticipant> findFirstByConferenceIdAndUserId(String conferenceId, String userId);
 
     @Query("SELECT DISTINCT cp.conferenceId FROM ConferenceParticipant cp WHERE cp.userId = ?1")
     List<String> findDistinctConferenceIdsByUserId(String userId);

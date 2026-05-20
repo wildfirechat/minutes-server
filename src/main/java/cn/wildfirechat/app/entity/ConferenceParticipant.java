@@ -6,7 +6,8 @@ import java.util.Date;
 @Entity
 @Table(name = "conference_participant", indexes = {
         @Index(name = "idx_cp_conference_created", columnList = "conference_id, created_at"),
-        @Index(name = "idx_cp_user_id", columnList = "user_id")
+        @Index(name = "idx_cp_user_id", columnList = "user_id"),
+        @Index(name = "idx_cp_conference_user", columnList = "conference_id, user_id", unique = true)
 })
 public class ConferenceParticipant {
 

@@ -31,6 +31,7 @@ import org.springframework.data.domain.Sort;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.regex.Matcher;
@@ -97,11 +98,19 @@ public class MeetingSummaryService {
             }
 
             try {
-                MeetingSummary meetingSummary = new MeetingSummary();
-                meetingSummary.setConferenceId(conferenceId);
-                meetingSummary.setSummary(summary);
+                Optional<MeetingSummary> existing = meetingSummaryRepository.findByConferenceId(conferenceId);
+                MeetingSummary meetingSummary;
+                if (existing.isPresent()) {
+                    meetingSummary = existing.get();
+                    meetingSummary.setSummary(summary);
+                    LOG.info("Updated existing meeting summary for conferenceId={}", conferenceId);
+                } else {
+                    meetingSummary = new MeetingSummary();
+                    meetingSummary.setConferenceId(conferenceId);
+                    meetingSummary.setSummary(summary);
+                    LOG.info("Saved new meeting summary for conferenceId={}", conferenceId);
+                }
                 meetingSummaryRepository.save(meetingSummary);
-                LOG.info("Saved meeting summary to database for conferenceId={}", conferenceId);
             } catch (Exception e) {
                 LOG.error("Failed to save meeting summary to database for conferenceId={}", conferenceId, e);
             }
